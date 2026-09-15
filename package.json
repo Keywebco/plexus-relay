@@ -1,0 +1,17 @@
+{
+  "name": "plexus-relay",
+  "version": "1.0.0",
+  "description": "Plexus — freestanding AI relay interface. Pure message bus, no LLM.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "license": "ISC"
+}
