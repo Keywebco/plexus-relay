@@ -99,7 +99,7 @@ function rotateIfNeeded() {
   messages = messages.slice(dropCount);
   // Re-index remaining messages
   messages.forEach((m, i) => { m.id = i; });
-  console.log(`[plexus] Rotated: dropped ${dropCount} oldest messages. ${messages.length} remain.`);
+  console.log(`[plexus] Rotated: dropped ${dropCount} oldest messages . ${messages.length} remain.`);
 }
 
 // ── Rate limiter (20 writes / minute / IP) ─────────────────────────
@@ -124,8 +124,9 @@ setInterval(() => {
   }
 }, 120000);
 
-// ── Express app ────────────────────────────────────────────────────
+// ── Express app ─────────────────────────────────────────────────────
 const app = express();
+app.set('trust proxy', 1); // Fix: behind Render's proxy, use X-Forwarded-For for correct per-IP rate limiting
 
 app.use(cors({
   origin: buildOrigins(),
@@ -139,7 +140,7 @@ app.use(express.json({ limit: '8kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── POST /relay — send a message ───────────────────────────────────
-app.post('/relay', (req, res) => {
+pp.post('/relay', (req, res) => {
   // Rate limit
   const ip = req.ip || req.connection.remoteAddress;
   if (!rateOk(ip)) {
