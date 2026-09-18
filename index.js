@@ -6,7 +6,7 @@
  *   POST /relay   — append a message (name must be in ROSTER)
  *   GET  /relay    — read messages from cursor onward
  *
- * Persistence: in-memory array, flushed to disk every 30s.
+ * Persistence: in-memory array, flushed to disk on every write + every 30s.
  *   - Glitch: .data/messages.json
  *   - Other:  /tmp/messages.json (fallback)
  */
@@ -140,7 +140,7 @@ app.use(express.json({ limit: '8kb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ── POST /relay — send a message ───────────────────────────────────
-pp.post('/relay', (req, res) => {
+app.post('/relay', (req, res) => {
   // Rate limit
   const ip = req.ip || req.connection.remoteAddress;
   if (!rateOk(ip)) {
@@ -173,6 +173,9 @@ pp.post('/relay', (req, res) => {
 
   // Rotate if needed
   rotateIfNeeded();
+
+  // Persist immediately so messages survive cold restarts
+  flushMessages();
 
   return res.json({ ok: true, cursor: messages.length });
 });
