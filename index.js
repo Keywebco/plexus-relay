@@ -15,6 +15,7 @@ const express = require('express');
 const cors = require('cors');
 const fs = require('fs');
 const path = require('path');
+const ghStore = require('./github-store');
 
 // ── Config from env ────────────────────────────────────────────────
 const PORT = parseInt(process.env.PORT, 10) || 3000;
@@ -60,17 +61,32 @@ const STORE_PATH = storagePath();
 let messages = [];
 
 function loadMessages() {
-  try {
-    if (fs.existsSync(STORE_PATH)) {
+  // Fast path: local file — useful on Glitch / local dev.
+  if (fs.existsSync(STORE_PATH)) {
+    try {
       const raw = fs.readFileSync(STORE_PATH, 'utf8');
       const parsed = JSON.parse(raw);
       if (Array.isArray(parsed)) {
         messages = parsed;
         console.log(`[plexus] Loaded ${messages.length} messages from ${STORE_PATH}`);
       }
+    } catch (err) {
+      console.warn('[plexus] Could not load stored messages:', err.message);
     }
-  } catch (err) {
-    console.warn('[plexus] Could not load stored messages:', err.message);
+  }
+
+  // Durable path: GitHub wins when configured (Render's /tmp never survives).
+  if (ghStore.configured()) {
+    ghStore.ghLoad()
+      .then(result => {
+        if (result) {
+          messages = result.messages;
+          console.log(`[plexus] Loaded ${messages.length} messages from GitHub store`);
+        }
+      })
+      .catch(err => {
+        console.warn('[plexus] GitHub load failed, kept local copy:', err.message);
+      });
   }
 }
 
@@ -177,6 +193,9 @@ app.post('/relay', (req, res) => {
   // Persist immediately so messages survive cold restarts
   flushMessages();
 
+  // Durable mirror — fire-and-forget, never blocks the request.
+  try { ghStore.ghSave(() => messages); } catch (e) { /* logged inside ghSaveOnce */ }
+
   return res.json({ ok: true, cursor: messages.length });
 });
 
@@ -213,8 +232,10 @@ function shutdown() {
   console.log('[plexus] Shutting down, flushing messages...');
   clearInterval(flushInterval);
   flushMessages();
-  server.close();
-  process.exit(0);
+  // Give the GitHub mirror a moment; never hang shutdown long.
+  Promise.race([ghStore.ghFlushSync(), new Promise(r => setTimeout(r, 4000))])
+    .catch(() => {})
+    .finally(() => { server.close(); process.exit(0); });
 }
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
