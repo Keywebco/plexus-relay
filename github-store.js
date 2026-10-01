@@ -19,25 +19,42 @@ function configured() {
 }
 
 function headers() {
-  return {
-    'Authorization': `Bearer ${process.env.GITHUB_TOKEN}`,
+  const h = {
     'Accept': 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'plexus-relay'
   };
+  if (process.env.GITHUB_TOKEN) h['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+  return h;
 }
 
 let storeSha = null;
 let saveChain = Promise.resolve();
 
-async function ghLoad() {
-  if (!configured()) return null;
-  const res = await fetch(`${API}?ref=${BRANCH}`, { headers: headers() });
+// Reads work with GITHUB_TOKEN (preferred) or, if the token is missing, as an
+// unauthenticated read of the public store repo so a cold start still seeds.
+// Writes (ghSave) still require GITHUB_TOKEN.
+async function ghLoad({ timeoutMs = 15000 } = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res;
+  try {
+    res = await fetch(`${API}?ref=${BRANCH}`, { headers: headers(), signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
   if (res.status === 404) return { messages: [], sha: null };
   if (!res.ok) throw new Error(`GitHub load failed: ${res.status}`);
   const data = await res.json();
   storeSha = data.sha || null;
-  const text = Buffer.from(data.content || '', 'base64').toString('utf8');
+  let text = Buffer.from(data.content || '', 'base64').toString('utf8');
+  // Files over 1 MB come back without inline content; fetch the raw body instead.
+  if (!text && data.download_url) {
+    const raw = await fetch(data.download_url, { headers: { 'User-Agent': 'plexus-relay' } });
+    if (!raw.ok) throw new Error(`GitHub raw load failed: ${raw.status}`);
+    text = await raw.text();
+  }
+  if (!text.trim()) return { messages: [], sha: storeSha };
   const parsed = JSON.parse(text);
   return { messages: Array.isArray(parsed) ? parsed : [], sha: storeSha };
 }

@@ -60,33 +60,57 @@ const STORE_PATH = storagePath();
 // ── Message store ──────────────────────────────────────────────────
 let messages = [];
 
-function loadMessages() {
-  // Fast path: local file — useful on Glitch / local dev.
-  if (fs.existsSync(STORE_PATH)) {
-    try {
-      const raw = fs.readFileSync(STORE_PATH, 'utf8');
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        messages = parsed;
-        console.log(`[plexus] Loaded ${messages.length} messages from ${STORE_PATH}`);
-      }
-    } catch (err) {
-      console.warn('[plexus] Could not load stored messages:', err.message);
-    }
-  }
+function messageKey(m) {
+  return `${m.ts}|${m.name}|${m.text}`;
+}
 
-  // Durable path: GitHub wins when configured (Render's /tmp never survives).
-  if (ghStore.configured()) {
-    ghStore.ghLoad()
-      .then(result => {
-        if (result) {
-          messages = result.messages;
-          console.log(`[plexus] Loaded ${messages.length} messages from GitHub store`);
-        }
-      })
-      .catch(err => {
-        console.warn('[plexus] GitHub load failed, kept local copy:', err.message);
-      });
+// Merge two message lists, de-duplicated, oldest first, re-indexed.
+function mergeMessageLists(a, b) {
+  const seen = new Set();
+  const merged = [];
+  for (const m of [...a, ...b]) {
+    if (!m || typeof m !== 'object') continue;
+    const k = messageKey(m);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    merged.push(m);
+  }
+  merged.sort((x, y) => (x.ts || 0) - (y.ts || 0));
+  merged.forEach((m, i) => { m.id = i; });
+  return merged;
+}
+
+function loadLocalMessages() {
+  // Fast path: local file — useful on Glitch / local dev.
+  if (!fs.existsSync(STORE_PATH)) return;
+  try {
+    const raw = fs.readFileSync(STORE_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      messages = parsed;
+      console.log(`[plexus] Loaded ${messages.length} messages from ${STORE_PATH}`);
+    }
+  } catch (err) {
+    console.warn('[plexus] Could not load stored messages:', err.message);
+  }
+}
+
+// Cold-start seed: Render's /tmp never survives a restart, so the GitHub
+// store (store/messages.json) is the durable source. This is AWAITED before
+// the server starts listening, so no request ever sees an empty store while
+// the reload is still in flight. Remote and local copies are merged, never
+// overwritten, so nothing is lost if both exist.
+async function loadMessages() {
+  loadLocalMessages();
+  try {
+    const result = await ghStore.ghLoad();
+    if (result) {
+      messages = mergeMessageLists(result.messages, messages);
+      console.log(`[plexus] Seeded ${messages.length} messages from GitHub store`);
+      flushMessages();
+    }
+  } catch (err) {
+    console.warn('[plexus] GitHub load failed, kept local copy:', err.message);
   }
 }
 
@@ -215,16 +239,19 @@ app.get('/health', (_req, res) => {
 });
 
 // ── Start ──────────────────────────────────────────────────────────
-loadMessages();
-
 // Flush to disk every 30 seconds
 const flushInterval = setInterval(flushMessages, 30000);
 
-const server = app.listen(PORT, () => {
-  console.log(`[plexus] Relay listening on port ${PORT}`);
-  console.log(`[plexus] Roster: ${ROSTER.join(', ')}`);
-  console.log(`[plexus] Max messages: ${MAX_MESSAGES}`);
-  console.log(`[plexus] Store path: ${STORE_PATH}`);
+let server = null;
+const ready = loadMessages().then(() => {
+  server = app.listen(PORT, () => {
+    console.log(`[plexus] Relay listening on port ${PORT}`);
+    console.log(`[plexus] Roster: ${ROSTER.join(', ')}`);
+    console.log(`[plexus] Max messages: ${MAX_MESSAGES}`);
+    console.log(`[plexus] Store path: ${STORE_PATH}`);
+    console.log(`[plexus] Messages at start: ${messages.length}`);
+  });
+  return server;
 });
 
 // Graceful shutdown — flush before exit
@@ -235,9 +262,10 @@ function shutdown() {
   // Give the GitHub mirror a moment; never hang shutdown long.
   Promise.race([ghStore.ghFlushSync(), new Promise(r => setTimeout(r, 4000))])
     .catch(() => {})
-    .finally(() => { server.close(); process.exit(0); });
+    .finally(() => { if (server) server.close(); process.exit(0); });
 }
 process.on('SIGTERM', shutdown);
 process.on('SIGINT', shutdown);
 
 module.exports = app; // For testing
+module.exports.ready = ready; // resolves once the store is seeded and the server is listening
