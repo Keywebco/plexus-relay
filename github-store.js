@@ -18,13 +18,13 @@ function configured() {
   return !!process.env.GITHUB_TOKEN;
 }
 
-function headers() {
+function headers({ anonymous = false } = {}) {
   const h = {
     'Accept': 'application/vnd.github+json',
     'X-GitHub-Api-Version': '2022-11-28',
     'User-Agent': 'plexus-relay'
   };
-  if (process.env.GITHUB_TOKEN) h['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+  if (!anonymous && process.env.GITHUB_TOKEN) h['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
   return h;
 }
 
@@ -40,6 +40,12 @@ async function ghLoad({ timeoutMs = 15000 } = {}) {
   let res;
   try {
     res = await fetch(`${API}?ref=${BRANCH}`, { headers: headers(), signal: controller.signal });
+    // A dead or revoked key must not stop a READ of this public repo: retry once
+    // without the key. (Writes still need a valid key; they are unchanged.)
+    if ((res.status === 401 || res.status === 403) && process.env.GITHUB_TOKEN) {
+      console.warn(`[plexus] GitHub load got ${res.status} with the saved key; retrying without a key (public read)`);
+      res = await fetch(`${API}?ref=${BRANCH}`, { headers: headers({ anonymous: true }), signal: controller.signal });
+    }
   } finally {
     clearTimeout(timer);
   }
