@@ -31,6 +31,10 @@ const MAX_BYTES = 5 * 1024 * 1024; // ~5 MB rotation trigger
 function buildOrigins() {
   const defaults = [
     'https://keywebco.github.io',
+    // The boards on keywebco.github.io now redirect to the Next-Xus custom
+    // domains, so the browser's Origin is the custom domain. Without these
+    // the meeting-room boards cannot read or post (CORS blocks them).
+    /^https?:\/\/(www\.)?next-xus\.(net|org|info|biz|com)$/,
     /https?:\/\/.*\.glitch\.me$/,
     /https?:\/\/localhost(:\d+)?$/,
     /https?:\/\/127\.0\.0\.1(:\d+)?$/
