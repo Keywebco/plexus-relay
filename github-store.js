@@ -44,6 +44,14 @@ async function ghLoad({ timeoutMs = 15000 } = {}) {
     clearTimeout(timer);
   }
   if (res.status === 404) return { messages: [], sha: null };
+  // 401 (expired/revoked token) or 403 (API rate limit on shared Render IPs)
+  // used to leave the relay empty after every restart. The store repo is
+  // public, so fall back to the raw file, which needs no token and has no
+  // API rate limit. Writes still need a valid GITHUB_TOKEN.
+  if (res.status === 401 || res.status === 403) {
+    console.warn(`[plexus] GitHub API load got ${res.status}; falling back to raw public read`);
+    return rawLoad();
+  }
   if (!res.ok) throw new Error(`GitHub load failed: ${res.status}`);
   const data = await res.json();
   storeSha = data.sha || null;
@@ -56,6 +64,18 @@ async function ghLoad({ timeoutMs = 15000 } = {}) {
   }
   if (!text.trim()) return { messages: [], sha: storeSha };
   const parsed = JSON.parse(text);
+  return { messages: Array.isArray(parsed) ? parsed : [], sha: storeSha };
+}
+
+async function rawLoad() {
+  const url = `https://raw.githubusercontent.com/${REPO}/${BRANCH}/${STORE_PATH}`;
+  const raw = await fetch(url, { headers: { 'User-Agent': 'plexus-relay' } });
+  if (raw.status === 404) return { messages: [], sha: null };
+  if (!raw.ok) throw new Error(`GitHub raw load failed: ${raw.status}`);
+  const text = await raw.text();
+  if (!text.trim()) return { messages: [], sha: null };
+  const parsed = JSON.parse(text);
+  // sha stays null: a later save will hit 409/422 and re-load with the token.
   return { messages: Array.isArray(parsed) ? parsed : [], sha: storeSha };
 }
 
