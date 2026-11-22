@@ -4,7 +4,8 @@
   "description": "Plexus — freestanding AI relay interface. Pure message bus, no LLM.",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "test": "node --test --test-force-exit test.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
